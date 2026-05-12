@@ -14,23 +14,20 @@ MSK = ZoneInfo("Europe/Moscow")
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 
-def get_events(now):
-    events = []
-
-    # Гильд пати ежедневно 21:00
-    events.append(("Гильд пати", next_time(now, None, 21, 0)))
-
-    # Арена Пн (0) Вт (1)
-    events.append(("Арена", next_time(now, 0, 21, 0)))
-    events.append(("Арена", next_time(now, 1, 21, 0)))
-
-    # Брейкинг армия Ср (2) Пт (4)
-    events.append(("Брейкинг арми", next_time(now, 2, 20, 0)))
-    events.append(("Брейкинг арми", next_time(now, 4, 20, 0)))
-
-    return events
 
 def next_time(now, weekday, hour, minute):
+    """
+    weekday:
+    None = каждый день
+    0 = понедельник
+    1 = вторник
+    2 = среда
+    3 = четверг
+    4 = пятница
+    5 = суббота
+    6 = воскресенье
+    """
+
     if weekday is None:
         dt = datetime.combine(now.date(), time(hour, minute), tzinfo=MSK)
         if dt <= now:
@@ -38,19 +35,80 @@ def next_time(now, weekday, hour, minute):
         return dt
 
     days = (weekday - now.weekday()) % 7
-    dt = datetime.combine(now.date() + timedelta(days=days), time(hour, minute), tzinfo=MSK)
+    dt = datetime.combine(
+        now.date() + timedelta(days=days),
+        time(hour, minute),
+        tzinfo=MSK
+    )
+
     if dt <= now:
         dt += timedelta(days=7)
+
     return dt
+
+
+def get_events(now):
+    events = []
+
+    # Гильд пати — ежедневно 21:00–21:30 МСК
+    events.append({
+        "name": "Гильд пати",
+        "start": next_time(now, None, 21, 0),
+        "end_text": "21:30 МСК"
+    })
+
+    # Арена — понедельник 21:00–22:00 МСК
+    events.append({
+        "name": "Арена",
+        "start": next_time(now, 0, 21, 0),
+        "end_text": "22:00 МСК"
+    })
+
+    # Арена — вторник 21:00–22:00 МСК
+    events.append({
+        "name": "Арена",
+        "start": next_time(now, 1, 21, 0),
+        "end_text": "22:00 МСК"
+    })
+
+    # Брейкинг арми — среда 20:00–22:00 МСК
+    events.append({
+        "name": "Брейкинг арми",
+        "start": next_time(now, 2, 20, 0),
+        "end_text": "22:00 МСК"
+    })
+
+    # Брейкинг арми — пятница 20:00–22:00 МСК
+    events.append({
+        "name": "Брейкинг арми",
+        "start": next_time(now, 4, 20, 0),
+        "end_text": "22:00 МСК"
+    })
+
+    return events
+
 
 async def send_and_delete(channel, text):
     msg = await channel.send(text)
-    await asyncio.sleep(DELETE_AFTER)
-    await msg.delete()
 
-async def loop():
+    await asyncio.sleep(DELETE_AFTER)
+
+    try:
+        await msg.delete()
+    except discord.NotFound:
+        pass
+    except discord.Forbidden:
+        print("Нет прав на удаление сообщений.")
+
+
+async def reminder_loop():
     await client.wait_until_ready()
+
     channel = client.get_channel(CHANNEL_ID)
+
+    if channel is None:
+        print("Канал не найден. Проверь CHANNEL_ID.")
+        return
 
     sent_30 = set()
     sent_start = set()
@@ -58,26 +116,42 @@ async def loop():
     while not client.is_closed():
         now = datetime.now(MSK)
 
-        for name, event_time in get_events(now):
-            key = f"{name}-{event_time}"
+        for event in get_events(now):
+            name = event["name"]
+            event_time = event["start"]
+            end_text = event["end_text"]
+
+            key = f"{name}-{event_time.isoformat()}"
 
             diff = (event_time - now).total_seconds()
 
-            # за 30 минут
+            # Напоминание за 30 минут
             if 1700 < diff < 1800 and key not in sent_30:
                 sent_30.add(key)
-                await send_and_delete(channel, f"@everyone 🔔 Через 30 минут начнётся {name}!")
 
-            # старт
+                await send_and_delete(
+                    channel,
+                    f"@everyone 🔔 Через 30 минут начнётся **{name}**!\n"
+                    f"Время: **{event_time.strftime('%H:%M')}–{end_text}**"
+                )
+
+            # Напоминание в момент старта
             if 0 < diff < 60 and key not in sent_start:
                 sent_start.add(key)
-                await send_and_delete(channel, f"@everyone 🚨 {name} начинается прямо сейчас!")
+
+                await send_and_delete(
+                    channel,
+                    f"@everyone 🚨 **{name}** начинается прямо сейчас!\n"
+                    f"Время: **{event_time.strftime('%H:%M')}–{end_text}**"
+                )
 
         await asyncio.sleep(30)
+
 
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
-    client.loop.create_task(loop())
+    client.loop.create_task(reminder_loop())
+
 
 client.run(TOKEN)
