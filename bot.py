@@ -141,7 +141,6 @@ async def reminder_loop():
         for event in get_events(now):
             name = event["name"]
             event_time = event["start"]
-            end_text = event["end_text"]
 
             key = f"{name}-{event_time.isoformat()}"
 
@@ -154,8 +153,7 @@ async def reminder_loop():
 
                 await send_and_schedule_delete(
                     channel,
-                    f"@everyone 🔔 Через 30 минут начнётся **{name}**!\n"
-                    f"Время: **{event_time.strftime('%H:%M')}–{end_text}**"
+                    f"@everyone 🔔 Через 30 минут начнётся **{name}**!"
                 )
 
             # Напоминание в момент старта
@@ -166,8 +164,7 @@ async def reminder_loop():
 
                 await send_and_schedule_delete(
                     channel,
-                    f"@everyone 🚨 **{name}** начинается прямо сейчас!\n"
-                    f"Время: **{event_time.strftime('%H:%M')}–{end_text}**"
+                    f"@everyone 🚨 **{name}** начинается прямо сейчас!"
                 )
 
         await asyncio.sleep(15)
