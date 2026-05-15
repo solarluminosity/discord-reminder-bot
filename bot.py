@@ -7,6 +7,9 @@ import discord
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
+
+# Через сколько удалять сообщения бота
+# 1800 секунд = 30 минут
 DELETE_AFTER = int(os.getenv("DELETE_AFTER_SECONDS", "1800"))
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -30,18 +33,25 @@ def next_time(now, weekday, hour, minute):
 
     if weekday is None:
         dt = datetime.combine(now.date(), time(hour, minute), tzinfo=MSK)
-        if dt <= now:
+
+        # ВАЖНО:
+        # Даём небольшое окно после старта, чтобы бот успел отправить сообщение
+        # если цикл сработал не ровно в 21:00:00, а, например, в 21:00:15.
+        if dt < now - timedelta(minutes=2):
             dt += timedelta(days=1)
+
         return dt
 
     days = (weekday - now.weekday()) % 7
+
     dt = datetime.combine(
         now.date() + timedelta(days=days),
         time(hour, minute),
         tzinfo=MSK
     )
 
-    if dt <= now:
+    # Тоже оставляем окно после старта
+    if dt < now - timedelta(minutes=2):
         dt += timedelta(days=7)
 
     return dt
@@ -88,9 +98,7 @@ def get_events(now):
     return events
 
 
-async def send_and_delete(channel, text):
-    msg = await channel.send(text)
-
+async def delete_later(msg):
     await asyncio.sleep(DELETE_AFTER)
 
     try:
@@ -99,6 +107,20 @@ async def send_and_delete(channel, text):
         pass
     except discord.Forbidden:
         print("Нет прав на удаление сообщений.")
+    except discord.HTTPException as e:
+        print(f"Ошибка при удалении сообщения: {e}")
+
+
+async def send_and_schedule_delete(channel, text):
+    msg = await channel.send(
+        text,
+        allowed_mentions=discord.AllowedMentions(everyone=True)
+    )
+
+    # ВАЖНО:
+    # Удаление запускается отдельной задачей.
+    # Теперь бот НЕ засыпает на 30 минут и продолжает проверять ивенты.
+    asyncio.create_task(delete_later(msg))
 
 
 async def reminder_loop():
@@ -126,32 +148,37 @@ async def reminder_loop():
             diff = (event_time - now).total_seconds()
 
             # Напоминание за 30 минут
-            if 1700 < diff < 1800 and key not in sent_30:
+            # Окно сделано шире, чтобы бот не пропускал уведомление из-за задержки цикла.
+            if 1740 <= diff <= 1800 and key not in sent_30:
                 sent_30.add(key)
 
-                await send_and_delete(
+                await send_and_schedule_delete(
                     channel,
                     f"@everyone 🔔 Через 30 минут начнётся **{name}**!\n"
                     f"Время: **{event_time.strftime('%H:%M')}–{end_text}**"
                 )
 
             # Напоминание в момент старта
-            if 0 < diff < 60 and key not in sent_start:
+            # Теперь работает даже если бот проверил не ровно в 21:00:00,
+            # а чуть позже, например в 21:00:15 или 21:00:40.
+            if -60 <= diff <= 30 and key not in sent_start:
                 sent_start.add(key)
 
-                await send_and_delete(
+                await send_and_schedule_delete(
                     channel,
                     f"@everyone 🚨 **{name}** начинается прямо сейчас!\n"
                     f"Время: **{event_time.strftime('%H:%M')}–{end_text}**"
                 )
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(15)
 
 
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
-    client.loop.create_task(reminder_loop())
+
+    if not hasattr(client, "reminder_task"):
+        client.reminder_task = asyncio.create_task(reminder_loop())
 
 
 client.run(TOKEN)
